@@ -6,8 +6,7 @@ standard input in their place when none are named.
 `cat`
 
 ```go
-f := argf.New(flag.Args()...)
-if _, err := io.Copy(os.Stdout, f); err != nil {
+if _, err := io.Copy(os.Stdout, argf.Default); err != nil {
 	log.Fatal(err)
 }
 ```
@@ -15,11 +14,13 @@ if _, err := io.Copy(os.Stdout, f); err != nil {
 `grep`
 
 ```go
-f := argf.New(flag.Args()...)
-sc := bufio.NewScanner(f)
+pattern := flag.String("e", "", "pattern to match")
+flag.Parse()
+
+sc := bufio.NewScanner(argf.Default)
 for sc.Scan() {
-	if strings.Contains(sc.Text(), pattern) {
-		fmt.Printf("%s:%s\n", f.Filename(), sc.Text())
+	if strings.Contains(sc.Text(), *pattern) {
+		fmt.Printf("%s:%s\n", argf.Default.Filename(), sc.Text())
 	}
 }
 if err := sc.Err(); err != nil {
@@ -30,9 +31,8 @@ if err := sc.Err(); err != nil {
 `cat` that reports an unreadable input and carries on
 
 ```go
-f := argf.New(flag.Args()...)
 for {
-	_, err := io.Copy(os.Stdout, f)
+	_, err := io.Copy(os.Stdout, argf.Default)
 	if err == nil {
 		break
 	}

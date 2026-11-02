@@ -1,12 +1,18 @@
-// Package argf reads the files named on a command line as one stream, with
-// standard input in their place when none are named.
+// Package argf reads the files named on the command line as one stream, with
+// standard input in their place when none are named. Default is that stream.
+//
+//	sc := bufio.NewScanner(argf.Default)
+//	for sc.Scan() {
+//		fmt.Printf("%s: %s\n", argf.Default.Filename(), sc.Text())
+//	}
 //
 // # Args and the Reader
 //
 // A Reader works with its Args slice.
 //
-//   - Args is the argument vector. Give it the command-line arguments with the
-//     options removed, which is flag.Args().
+//   - Args is the argument vector. Default fills it from the command line at
+//     the first read, with flag.Args() when the program has called flag.Parse
+//     and os.Args[1:] otherwise.
 //   - The Reader is the argument files. It opens the inputs Args names and
 //     reads them, in order, as one stream.
 //
@@ -15,7 +21,8 @@
 //   - the path of a file to open
 //   - "-", standard input
 //
-// Remove anything else from Args before the Reader reaches it.
+// A program that parses its command line some other way passes the operands
+// it found to New.
 //
 // # Reading
 //
@@ -49,11 +56,9 @@
 //
 // this program prints Args, Filename and the line for each line read:
 //
-//	flag.Parse()
-//	f := argf.New(flag.Args()...)
-//	sc := bufio.NewScanner(f)
+//	sc := bufio.NewScanner(argf.Default)
 //	for sc.Scan() {
-//		fmt.Printf("%q %q %q\n", f.Args, f.Filename(), sc.Text())
+//		fmt.Printf("%q %q %q\n", argf.Default.Args, argf.Default.Filename(), sc.Text())
 //	}
 //
 // Files are read in order, each name leaving Args as its file opens:
@@ -64,7 +69,7 @@
 //	[] "bar.txt" "Bar 0"
 //	[] "bar.txt" "Bar 1"
 //
-// An empty Args reads standard input:
+// No arguments reads standard input:
 //
 //	$ echo "Open the pod bay doors, Hal." | t
 //	[] "-" "Open the pod bay doors, Hal."
@@ -93,7 +98,7 @@
 // can and every error it meets:
 //
 //	for {
-//		sc := bufio.NewScanner(f)
+//		sc := bufio.NewScanner(argf.Default)
 //		for sc.Scan() {
 //			fmt.Println(sc.Text())
 //		}
@@ -121,17 +126,25 @@
 package argf
 
 import (
+	"flag"
 	"io"
 	"os"
 	"slices"
 )
 
+// Default reads the files named on the command line, or standard input when
+// none are named. It is New(flag.Args()...), made at the first read so that
+// flag.Parse has run by then. In a program that never calls flag.Parse, the
+// command line is os.Args[1:].
+var Default = New()
+
 // A Reader reads the inputs named in Args, in order, as one stream. The zero
-// value reads os.Stdin.
+// value reads the command line, as Default does.
 type Reader struct {
 	// Args is the argument vector. It holds the inputs not yet opened, each a
 	// file path or "-" for standard input. The Reader removes each name as it
-	// opens that input and consults Args again at every read.
+	// opens that input and consults Args again at every read. A nil Args is
+	// filled from the command line at the first read.
 	Args []string
 
 	current     *os.File
@@ -147,7 +160,9 @@ var (
 	_ io.WriterTo   = (*Reader)(nil)
 )
 
-// New returns a Reader whose Args is a copy of args.
+// New returns a Reader over a copy of args, the operands of a command line the
+// program parsed itself. With no operands it reads standard input. With no
+// arguments at all it reads the command line, as Default does.
 func New(args ...string) *Reader {
 	return &Reader{Args: slices.Clone(args)}
 }
@@ -218,16 +233,16 @@ func (r *Reader) File() *os.File {
 // will open. Standard input is named "-". Once the last input is exhausted
 // Filename still names that input. It opens nothing.
 func (r *Reader) Filename() string {
-	switch {
-	case r.current != nil:
-		return r.filename
-	case len(r.Args) > 0:
-		return r.Args[0]
-	case !r.started:
-		return "-"
-	default:
+	if r.current != nil {
 		return r.filename
 	}
+	if pending := r.pending(); len(pending) > 0 {
+		return pending[0]
+	}
+	if r.started {
+		return r.filename
+	}
+	return "-"
 }
 
 // Close closes the open input, unless it is standard input, and empties Args.
@@ -246,6 +261,9 @@ func (r *Reader) next() error {
 	switch {
 	case !r.started:
 		r.started = true
+		if r.Args == nil {
+			r.Args = slices.Clone(commandLine())
+		}
 		r.stdinOnly = len(r.Args) == 0
 	case r.stdinOnly && len(r.Args) > 0:
 		r.stdinOnly = false
@@ -273,6 +291,21 @@ func (r *Reader) next() error {
 	}
 	r.filename, r.current, r.ownsCurrent = name, f, true
 	return nil
+}
+
+// pending returns the names the next read will consider.
+func (r *Reader) pending() []string {
+	if !r.started && r.Args == nil {
+		return commandLine()
+	}
+	return r.Args
+}
+
+func commandLine() []string {
+	if flag.Parsed() {
+		return flag.Args()
+	}
+	return os.Args[1:]
 }
 
 func (r *Reader) useStdin() {
